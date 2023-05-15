@@ -5,6 +5,9 @@ from time import sleep
 
 import mido
 import pyautogui
+import pygame
+import pygame.midi as pgm
+from vgamepad import VX360Gamepad, XUSB_BUTTON
 
 
 def extract_midi_value(midi_message):
@@ -36,8 +39,8 @@ class Mapping:
     KEY_SEP = "+"
 
     def __init__(self, when_device, when_channel=None, when_is_program=False, when_control=None,
-                 when_note=None, when_value_between=(0, 127), do_joystick=None, do_button=None,
-                 do_axis=None, do_keys=None, do_on_off_threshold=None, do_axis_range=(0, 255)):
+                 when_note=None, when_value_between=(0, 127), with_joystick=None, do_button=None,
+                 do_axis=None, do_keys=None, do_on_off_threshold=None):
         # conditions
         self.when_device = when_device
         self.when_channel = when_channel
@@ -47,16 +50,15 @@ class Mapping:
         self.when_value_between = when_value_between
 
         # actions
-        self.do_joystick = do_joystick
+        self.with_joystick = with_joystick
         self.do_button = do_button
         self.do_axis = do_axis
         self.do_keys = do_keys
         self.do_on_off_threshold = do_on_off_threshold
-        self.do_axis_range = do_axis_range
 
         # checks
         if self.do_button is not None or self.do_axis is not None:
-            if self.do_joystick is None:
+            if self.with_joystick is None:
                 raise ValueError("To simulate a joystick button or axis, you must specify the "
                                  "joystick number in which to simulate them")
 
@@ -108,11 +110,10 @@ class Mapping:
 
         if self.do_axis is not None:
             input_min, input_max = self.when_value_between
-            output_min, output_max = self.do_axis_range
-            input_ratio = (input_value - input_min) / (input_max - input_min)
-            axis_value = int(output_min + (output_max - output_min) * input_ratio)
+            axis_value = (input_value - input_min) / (input_max - input_min)
 
-            print("Running joystick axis:", self.do_joystick, self.do_axis, axis_value)
+            print("Running joystick axis:", self.do_axis, axis_value, flush=True)
+            self.with_joystick.move_axis(self.do_axis, axis_value)
 
         if self.do_button is not None or self.do_keys is not None:
             if self.when_note is not None:
@@ -124,10 +125,14 @@ class Mapping:
                     on = input_value >= sum(self.when_value_between) / 2
 
             if self.do_button is not None:
-                print("Running joystick button:", self.do_joystick, self.do_button, on)
+                print("Running joystick button:", self.do_button, on, flush=True)
+                if on:
+                    self.with_joystick.press(self.do_button)
+                else:
+                    self.with_joystick.release(self.do_button)
 
             if self.do_keys is not None:
-                print("Running keys:", self.do_keys, on)
+                print("Running keys:", self.do_keys, on, flush=True)
                 if on:
                     for key in self.do_keys.split(self.KEY_SEP):
                         pyautogui.keyDown(key)
@@ -136,45 +141,112 @@ class Mapping:
                         pyautogui.keyUp(key)
 
 
-def single_device_loop(device_name, mappings):
-    """
-    Run the main loop for a single device. We need to have multiple processes with this same loop
-    running, one for each device. (to be able to differentiate messages from each device, as mido
-    doesn't tell us the device in the messages, so we can't use mido.ports.multi_receive()).
-    """
-    input_port = mido.open_input(device_name)
 
-    while True:
-        for message in input_port.iter_pending():
-            print("Device:", device_name, "Message:", message)
-            for mapping in mappings:
-                mapping.run_if_matches(message)
+class Joystick:
+    """
+    Wrapper around vgamepad joystick classes, to keep state and be able to alter 1 axis at a time.
+    """
+    # conversion from button number (0 to 14) to the internal vgamepad button id
+    BUTTONS = (
+        XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
+        XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,
+        XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,
+        XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,
+        XUSB_BUTTON.XUSB_GAMEPAD_START,
+        XUSB_BUTTON.XUSB_GAMEPAD_BACK,
+        XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
+        XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,
+        XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
+        XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
+        XUSB_BUTTON.XUSB_GAMEPAD_GUIDE,
+        XUSB_BUTTON.XUSB_GAMEPAD_A,
+        XUSB_BUTTON.XUSB_GAMEPAD_B,
+        XUSB_BUTTON.XUSB_GAMEPAD_X,
+        XUSB_BUTTON.XUSB_GAMEPAD_Y,
+    )
+    # conversion from axis number (0 to 5) to the internal vgamepad axis name
+    AXES = (
+        "triggers",  # both triggers add up together...
+        "left_joystick_float:x_value_float",
+        "left_joystick_float:y_value_float",
+        "right_joystick_float:x_value_float",
+        "right_joystick_float:y_value_float",
+    )
 
-        sleep(0.01)
+    def __init__(self):
+        self.pad = VX360Gamepad()
+        # using the same names from vgamepad, to make things easier
+        self.current_params_left_joystick_float = dict(x_value_float=-1, y_value_float=1)
+        self.current_params_right_joystick_float = dict(x_value_float=-1, y_value_float=1)
+
+    def press(self, button_number):
+        """
+        Hold down a button.
+        """
+        self.pad.press_button(button=self.BUTTONS[button_number])
+        self.pad.update()
+
+    def release(self, button_number):
+        """
+        Release a button.
+        """
+        self.pad.release_button(button=self.BUTTONS[button_number])
+        self.pad.update()
+
+    def move_axis(self, axis_number, value):
+        """
+        Set the value of an axis, as a ratio from 0 to 1.
+        """
+        axis_name = self.AXES[axis_number]
+        if ":" in axis_name:
+            value = value * 2 - 1
+            axis_name, param = axis_name.split(":")
+            if "y" in param:
+                value = -value
+            current_params = getattr(self, f"current_params_{axis_name}")
+            current_params[param] = value
+            getattr(self.pad, axis_name)(**current_params)
+            self.pad.update()
+        else:
+            if value >= 0.5:
+                # first half
+                self.pad.left_trigger_float(value_float=value * 2)
+                self.pad.right_trigger_float(value_float=0)
+            else:
+                # second half
+                self.pad.left_trigger_float(value_float=0)
+                self.pad.right_trigger_float(value_float=1 - value * 2)
+            self.pad.update()
 
 
 def run_midi_joysticks(mappings):
     """
     Run the main loop of the app.
     """
-    devices = set(m.when_device for m in mappings)
-    processes = []
+    pygame.init()
+    pgm.init()
+    midi_backend = mido.Backend('mido.backends.pygame')
 
-    for device_name in devices:
-        device_mappings = [m for m in mappings if m.when_device == device_name]
-        process = Process(target=single_device_loop, args=[device_name, device_mappings])
-        process.start()
-        processes.append(process)
+    device_names = set(m.when_device for m in mappings)
+    ports = [midi_backend.open_input(name) for name in device_names]
 
-    for process in processes:
-        process.join()
+    try:
+        while True:
+            for port, message in mido.ports.multi_receive(ports, yield_ports=True):
+                print("Device:", port.name, "Message:", message, flush=True)
+                for mapping in mappings:
+                    mapping.run_if_matches(message)
+
+            sleep(0.01)
+    except KeyboardInterrupt:
+        print("Quitting")
+        pgm.quit()
 
 
 if __name__ == "__main__":
-    print("Detected devices:", mido.get_input_names())
+    MIDI_CONTROLLER_1 = "W-FADER"
 
-    MIDI_CONTROLLER_1 = "W-FADER MIDI 1"
-    MIDI_CONTROLLER_2 = "LPD8 MIDI 1"
+    js1 = Joystick()
 
     my_mappings = [
         # top row knobs
@@ -182,34 +254,61 @@ if __name__ == "__main__":
             when_device=MIDI_CONTROLLER_1,
             when_control=10,
             when_value_between=(0, 127),
-            do_joystick=1,
-            do_axis="X",
+            with_joystick=js1,
+            do_axis=0,
+        ),
+        Mapping(
+            when_device=MIDI_CONTROLLER_1,
+            when_control=11,
+            when_value_between=(0, 127),
+            with_joystick=js1,
+            do_axis=1,
+        ),
+        Mapping(
+            when_device=MIDI_CONTROLLER_1,
+            when_control=12,
+            when_value_between=(0, 127),
+            with_joystick=js1,
+            do_axis=2,
+        ),
+        Mapping(
+            when_device=MIDI_CONTROLLER_1,
+            when_control=13,
+            when_value_between=(0, 127),
+            with_joystick=js1,
+            do_axis=3,
+        ),
+        Mapping(
+            when_device=MIDI_CONTROLLER_1,
+            when_control=14,
+            when_value_between=(0, 127),
+            with_joystick=js1,
+            do_axis=4,
         ),
         # buttons below sliders
         Mapping(
             when_device=MIDI_CONTROLLER_1,
             when_control=30,
             when_value_between=(0, 127),
-            do_joystick=1,
-            do_button=1,
+            with_joystick=js1,
+            do_button=0,
             do_on_off_threshold=64,
         ),
-        # program knob
         Mapping(
             when_device=MIDI_CONTROLLER_1,
-            when_is_program=True,
+            when_control=31,
             when_value_between=(0, 127),
-            do_joystick=1,
-            do_axis="Y",
-        ),
-
-        # lpd8 pads
-        Mapping(
-            when_device=MIDI_CONTROLLER_2,
-            when_note=36,
-            do_joystick=1,
             do_keys="enter",
         ),
+        # program knob
+        # Mapping(
+            # when_device=MIDI_CONTROLLER_1,
+            # when_is_program=True,
+            # when_value_between=(0, 127),
+            # with_joystick=js1,
+            # do_axis=0,
+        # ),
     ]
 
     run_midi_joysticks(my_mappings)
+
