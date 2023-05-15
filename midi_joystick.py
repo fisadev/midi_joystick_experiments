@@ -1,6 +1,3 @@
-import sys
-from enum import Enum
-from multiprocessing import Process
 from time import sleep
 
 import mido
@@ -139,7 +136,6 @@ class Mapping:
                 else:
                     for key in reversed(self.do_keys.split(self.KEY_SEP)):
                         pyautogui.keyUp(key)
-
 
 
 class Joystick:
@@ -311,4 +307,3 @@ if __name__ == "__main__":
     ]
 
     run_midi_joysticks(my_mappings)
-
