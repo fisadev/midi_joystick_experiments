@@ -1,0 +1,5 @@
+name: midi_joystick
+exec:
+  script: midi_joystick.py
+requirements:
+  - requirements.txt
