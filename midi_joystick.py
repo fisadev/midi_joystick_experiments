@@ -307,9 +307,14 @@ if __name__ == "__main__":
     ]
 
     import os
-    path = os.getenv("PYEMPAQ_PYZ_PATH", "not-found")
+    path = os.environ.get("PYEMPAQ_PYZ_PATH")
     print()
-    print("Running from", path)
+    if path:
+        print("Running from", path, flush=True)
+    else:
+        print("Can't find path!", flush=True)
+        for k, v in os.environ.items():
+            print(k, "=", v, flush=True)
     print()
 
     run_midi_joysticks(my_mappings)
