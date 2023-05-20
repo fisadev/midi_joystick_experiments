@@ -1,4 +1,5 @@
 mido
 pygame
 pyautogui
-vgamepad
+vgamepad; platform_system == "Windows"
+python-rtmidi; platform_system == "Linux"
