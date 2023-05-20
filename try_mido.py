@@ -1,42 +1,35 @@
-from multiprocessing import Process
 from time import sleep
+import sys
+import platform
 
 import pygame
 import pygame.midi as pgm
 import mido
 
 
-def single_device_loop(device_name):
-    mido.set_backend('mido.backends.pygame')
-    input_port = mido.open_input(device_name)
-
-    while True:
-        for message in input_port.iter_pending():
-            print("Device:", device_name, "Message:", message, flush=True)
-
-        sleep(0.01)
-
-
-if __name__ == "__main__":
+def run_midi_listeners(device_names):
+    """
+    Run the main loop of the app.
+    """
     pygame.init()
     pgm.init()
-    mido.set_backend('mido.backends.pygame')
 
-    device_names = set(mido.get_input_names())
+    if platform.system() == "Windows":
+        midi_backend = mido.Backend('mido.backends.pygame')
+    else:
+        midi_backend = mido.Backend('mido.backends.rtmidi')
 
-    print("Listening to devices:")
-    print()
-    print("\n".join(device_names))
-    print(flush=True)
+    ports = [midi_backend.open_input(name) for name in device_names]
 
-    processes = []
+    try:
+        while True:
+            for port, message in mido.ports.multi_receive(ports, yield_ports=True):
+                print("Device:", port.name, "Message:", message, flush=True)
 
-    for device_name in device_names:
-        process = Process(target=single_device_loop, args=[device_name])
-        process.start()
-        processes.append(process)
+            sleep(0.01)
+    except KeyboardInterrupt:
+        print("Quitting")
+        pgm.quit()
 
-    for process in processes:
-        process.join()
 
-    pgm.quit()
+run_midi_listeners(sys.argv[1:])
